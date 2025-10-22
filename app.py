@@ -1,74 +1,69 @@
 
 import streamlit as st
 import pandas as pd
-import sqlite3
-from datetime import datetime
+import os
 
-conn = sqlite3.connect("torneo_tennis.db", check_same_thread=False)
-c = conn.cursor()
+CLASSIFICA_FILE = "classifica.csv"
+STORICO_FILE = "storico.csv"
 
-c.execute("CREATE TABLE IF NOT EXISTS classifica (giocatore TEXT PRIMARY KEY, punti INTEGER DEFAULT 0)")
-c.execute("""
-    CREATE TABLE IF NOT EXISTS risultati (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        giocatore1 TEXT,
-        giocatore2 TEXT,
-        punteggio TEXT,
-        data TEXT
-    )
-""")
-conn.commit()
+if not os.path.exists(CLASSIFICA_FILE):
+    classifica = pd.DataFrame(columns=["Giocatore", "Partite", "Vittorie", "Set Vinti", "Set Persi"])
+    classifica.to_csv(CLASSIFICA_FILE, index=False)
+else:
+    classifica = pd.read_csv(CLASSIFICA_FILE)
 
-lista_giocatori = [
-    "Paolo R.", "Paola C.", "Francesco M.", "Massimo B.",
-    "Daniele T.", "Simone V.", "Gianni F.", "Leo S.",
-    "Maura F.", "Giovanni D.", "Andrea P.", "Maurizio P."
-]
+if not os.path.exists(STORICO_FILE):
+    storico = pd.DataFrame(columns=["Giocatore 1", "Giocatore 2", "Risultato"])
+    storico.to_csv(STORICO_FILE, index=False)
+else:
+    storico = pd.read_csv(STORICO_FILE)
 
-for g in lista_giocatori:
-    c.execute("INSERT OR IGNORE INTO classifica (giocatore, punti) VALUES (?, 0)", (g,))
-conn.commit()
+st.title("Torneo Tennis - Inserimento Risultati e Classifica")
 
-st.title("🎾 Torneo Tennis - Tutti contro Tutti")
-st.markdown("---")
+with st.form("Inserisci Risultato"):
+    giocatore1 = st.text_input("Giocatore 1")
+    giocatore2 = st.text_input("Giocatore 2")
+    risultato = st.text_input("Risultato (es. 6-0 6-0 o 1-6 7-5 6-3)")
+    submitted = st.form_submit_button("Salva Risultato")
 
-st.header("📥 Inserisci Risultato")
-col1, col2 = st.columns(2)
-with col1:
-    g1 = st.selectbox("Giocatore 1", lista_giocatori)
-with col2:
-    g2 = st.selectbox("Giocatore 2", [g for g in lista_giocatori if g != g1])
+    if submitted and giocatore1 and giocatore2 and risultato:
+        set_g1 = 0
+        set_g2 = 0
+        try:
+            for set_score in risultato.strip().split():
+                g1, g2 = map(int, set_score.split("-"))
+                if g1 > g2:
+                    set_g1 += 1
+                else:
+                    set_g2 += 1
+        except:
+            st.error("Formato punteggio non valido. Usa es. 6-0 6-0")
+            st.stop()
 
-punteggio = st.selectbox("Punteggio", ["2-0", "2-1", "1-2", "0-2"])
+        vincitore = giocatore1 if set_g1 > set_g2 else giocatore2
 
-if st.button("✅ Registra Risultato"):
-    c.execute("SELECT * FROM risultati WHERE (giocatore1=? AND giocatore2=?) OR (giocatore1=? AND giocatore2=?)", (g1, g2, g2, g1))
-    if c.fetchone():
-        st.warning("⚠️ Questo incontro è già stato registrato.")
-    else:
-        data = datetime.now().strftime("%Y-%m-%d %H:%M")
-        c.execute("INSERT INTO risultati (giocatore1, giocatore2, punteggio, data) VALUES (?, ?, ?, ?)", (g1, g2, punteggio, data))
-        if punteggio == "2-0":
-            c.execute("UPDATE classifica SET punti = punti + 3 WHERE giocatore = ?", (g1,))
-        elif punteggio == "2-1":
-            c.execute("UPDATE classifica SET punti = punti + 2 WHERE giocatore = ?", (g1,))
-            c.execute("UPDATE classifica SET punti = punti + 1 WHERE giocatore = ?", (g2,))
-        elif punteggio == "1-2":
-            c.execute("UPDATE classifica SET punti = punti + 1 WHERE giocatore = ?", (g1,))
-            c.execute("UPDATE classifica SET punti = punti + 2 WHERE giocatore = ?", (g2,))
-        elif punteggio == "0-2":
-            c.execute("UPDATE classifica SET punti = punti + 3 WHERE giocatore = ?", (g2,))
-        conn.commit()
-        st.success("✅ Risultato registrato con successo!")
+        for g, sets_vinti, sets_persi, vittoria in [
+            (giocatore1, set_g1, set_g2, vincitore == giocatore1),
+            (giocatore2, set_g2, set_g1, vincitore == giocatore2)
+        ]:
+            if g in classifica["Giocatore"].values:
+                idx = classifica[classifica["Giocatore"] == g].index[0]
+                classifica.at[idx, "Partite"] += 1
+                classifica.at[idx, "Vittorie"] += int(vittoria)
+                classifica.at[idx, "Set Vinti"] += sets_vinti
+                classifica.at[idx, "Set Persi"] += sets_persi
+            else:
+                classifica.loc[len(classifica)] = [g, 1, int(vittoria), sets_vinti, sets_persi]
 
-st.markdown("---")
+        storico.loc[len(storico)] = [giocatore1, giocatore2, risultato]
 
-st.header("📊 Classifica Attuale")
-df = pd.read_sql_query("SELECT * FROM classifica ORDER BY punti DESC", conn)
-st.dataframe(df, use_container_width=True)
+        classifica.to_csv(CLASSIFICA_FILE, index=False)
+        storico.to_csv(STORICO_FILE, index=False)
 
-st.markdown("---")
+        st.success("Risultato salvato e classifica aggiornata!")
 
-st.header("📄 Storico Incontri")
-storico = pd.read_sql_query("SELECT * FROM risultati ORDER BY data DESC", conn)
-st.dataframe(storico, use_container_width=True)
+st.subheader("Classifica Aggiornata")
+st.dataframe(classifica.sort_values(by=["Vittorie", "Set Vinti"], ascending=False))
+
+st.subheader("Storico Partite")
+st.dataframe(storico)
